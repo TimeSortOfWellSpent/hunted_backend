@@ -1,6 +1,8 @@
 services:
   web:
     build: .
+    volumes:
+      - ./app:/code/app
     ports:
       - "8000:80"
   db:

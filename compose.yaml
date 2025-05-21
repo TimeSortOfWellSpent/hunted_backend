@@ -1,6 +1,8 @@
 services:
   web:
     build: .
+    volumes:
+      - ./app:/code/app
     ports:
       - "8000:80"
     depends_on:
@@ -10,4 +12,10 @@ services:
     restart: always
     shm_size: 128mb
     environment:
+      POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
+    volumes:
+      - db_data:/var/lib/postgresql/data
+volumes:
+  db_data:
+    name: killer_db_data

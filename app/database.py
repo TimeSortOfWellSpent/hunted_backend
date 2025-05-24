@@ -2,7 +2,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlmodel import create_engine, SQLModel, Session
 
-SQLALCHEMY_DATABASE_URL = 'postgresql://postgres:admin@db/postgres'
+SQLALCHEMY_DATABASE_URL = 'postgresql://admin:admin@db/postgres'
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
 def create_db_and_tables():

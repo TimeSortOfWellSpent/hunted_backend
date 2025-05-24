@@ -3,9 +3,10 @@ import datetime
 from pydantic import EmailStr, BaseModel, Field
 from sqlmodel import Field, Relationship, SQLModel
 from typing import Optional
+from uuid import UUID
 
 class User(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
+    id: UUID | None = Field(default=None, primary_key=True)
     username: str
     photo_path: str | None = ""
     sessions: list["Session"] = Relationship(back_populates="owner")

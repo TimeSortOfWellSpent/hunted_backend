@@ -1,9 +1,16 @@
 from datetime import datetime
 
+from pydantic import computed_field, BaseModel, field_validator
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
-from typing import Optional
+from typing import Optional, Literal
 from uuid import UUID
+from enum import Enum
+
+class GameStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    FINISHED = "finished"
 
 class UserBase(SQLModel):
     username: str
@@ -34,9 +41,18 @@ class GameSession(GameSessionBase, table=True):
     owner: User | None = Relationship(back_populates="owned_game_sessions")
     eliminations: list["Elimination"] = Relationship(back_populates="game_session")
     participants: list["Participant"] = Relationship(back_populates="game_session")
-    created_at: datetime = datetime.now()
+    created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None
     ended_at: datetime | None
+
+    @computed_field
+    @property
+    def status(self) -> GameStatus:
+        if self.started_at is None:
+            return GameStatus.NOT_STARTED
+        if self.ended_at is None:
+            return GameStatus.IN_PROGRESS
+        return GameStatus.FINISHED
 
 class GameSessionCreate(GameSessionBase):
     owner_id: UUID
@@ -44,9 +60,14 @@ class GameSessionCreate(GameSessionBase):
 class GameSessionPublic(GameSessionBase):
     code: str
 
+class GameSessionStatusUpdate(BaseModel):
+    status: Literal[GameStatus.IN_PROGRESS, GameStatus.FINISHED]
 
 class Participant(SQLModel, table=True):
     __tablename__ = "participant"
+    __table_args__ = (
+        UniqueConstraint('user_id', 'game_session_id'),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     user_id: UUID | None = Field(default=None, foreign_key="user.id")
@@ -77,7 +98,10 @@ class Participant(SQLModel, table=True):
         back_populates="target"
     )
 
-class Elimination(SQLModel, table=True):
+class EliminationBase(SQLModel):
+    pass
+
+class Elimination(EliminationBase, table=True):
     __tablename__ = "elimination"
 
     id: int | None = Field(default=None, primary_key=True)
@@ -97,4 +121,4 @@ class Elimination(SQLModel, table=True):
         },
         back_populates="elimination_received"
     )
-    happened_at: datetime = datetime.now()
+    happened_at: datetime = Field(default_factory=datetime.now)

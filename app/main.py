@@ -1,16 +1,18 @@
 import secrets, string, jwt, random
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated
 from sqlalchemy.exc import IntegrityError
 from fastapi.encoders import jsonable_encoder
+
 from app.database import SessionDep, create_db_and_tables
-from app.models import GameSession, GameSessionPublic, User, UserPublic, UserCreate, Participant, GameStatus, \
+from app.models import GameSession, GameSessionPublic, User, UserPublic, Participant, GameStatus, \
     GameSessionStatusUpdate, Elimination
 from app.security import JWT_SECRET_KEY, ALGORITHM
 from app.dependencies import UserDep, UUIDDep, GameSessionDep, ParticipantDep
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Form, File, UploadFile
 from sqlmodel import select
-
+from app.storage import upload_file
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,11 +46,13 @@ def get_sessions(
 @app.post("/users/", status_code=201)
 def create_user(
         session: SessionDep,
-        user: UserCreate,
+        username: Annotated[str, Form()],
+        photo: Annotated[UploadFile, File()],
         uuid: UUIDDep,
     ):
-
-    user_db = User.model_validate(user, update={"id": uuid})
+    filename = upload_file(photo)
+    if filename == '': raise HTTPException(status_code=500, detail="File could not be uploaded")
+    user_db = User(username=username, id=uuid, filename=filename)
     session.add(user_db)
     try:
         session.commit()

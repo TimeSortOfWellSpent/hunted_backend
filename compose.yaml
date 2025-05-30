@@ -7,6 +7,8 @@ services:
       - "8000:80"
     depends_on:
       - db
+    env_file:
+      - ".env"
   db:
     image: postgres:16
     restart: always
@@ -19,6 +21,19 @@ services:
       POSTGRES_DB: app
     volumes:
       - db_data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - ~/minio/data:/data
+    command: server /data --console-address ":9001"
+
 volumes:
   db_data:
     name: killer_db_data

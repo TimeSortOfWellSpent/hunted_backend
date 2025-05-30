@@ -3,3 +3,7 @@ pydantic>=2.7.0,<3.0.0
 sqlmodel==0.0.24
 psycopg2-binary
 pyjwt
+python-multipart
+boto3
+pydantic-settings
+python-dotenv

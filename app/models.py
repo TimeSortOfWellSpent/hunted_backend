@@ -1,9 +1,9 @@
 from datetime import datetime
-
+from fastapi import File, UploadFile, Form
 from pydantic import computed_field, BaseModel, field_validator
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
-from typing import Optional, Literal
+from typing import Optional, Literal, Annotated
 from uuid import UUID
 from enum import Enum
 
@@ -14,17 +14,14 @@ class GameStatus(str, Enum):
 
 class UserBase(SQLModel):
     username: str
-    photo_path: str = ""
 
 class User(UserBase, table=True):
     __tablename__ = "user"
 
     id: UUID | None = Field(default=None, primary_key=True)
+    photo_path: str = ""
     participations: list["Participant"] = Relationship(back_populates="user")
     owned_game_sessions: list["GameSession"] = Relationship(back_populates="owner")
-
-class UserCreate(UserBase):
-    pass
 
 class UserPublic(UserBase):
     pass

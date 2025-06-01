@@ -7,3 +7,5 @@ python-multipart
 boto3
 pydantic-settings
 python-dotenv
+deepface
+tf-keras

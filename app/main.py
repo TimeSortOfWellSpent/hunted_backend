@@ -12,11 +12,15 @@ from app.security import JWT_SECRET_KEY, ALGORITHM
 from app.dependencies import UserDep, UUIDDep, GameSessionDep, ParticipantDep
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile
 from sqlmodel import select
-from app.storage import upload_file
-
+from app.storage import upload_file, get_file
+from deepface import DeepFace
+import numpy as np
+from PIL import Image
+import cv2
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    DeepFace.build_model("VGG-Face")
     yield
 app = FastAPI(lifespan=lifespan)
 
@@ -51,8 +55,7 @@ def create_user(
         uuid: UUIDDep,
     ):
     filename = upload_file(photo)
-    if filename == '': raise HTTPException(status_code=500, detail="File could not be uploaded")
-    user_db = User(username=username, id=uuid, filename=filename)
+    user_db = User(username=username, id=uuid, photo_path=filename)
     session.add(user_db)
     try:
         session.commit()
@@ -111,7 +114,7 @@ def update_session_status(
     elif game_session.status == GameStatus.NOT_STARTED:
         if status.status == GameStatus.FINISHED:
             raise HTTPException(status_code=403, detail="The session has not been started yet")
-        if len(game_session.participants) >= 3:
+        if len(game_session.participants) >= 2:
             assign_targets(game_session.participants)
             game_session.sqlmodel_update({"started_at": datetime.now()})
     elif game_session.status == GameStatus.IN_PROGRESS:
@@ -132,8 +135,19 @@ def assign_targets(participants: list[Participant]):
 @app.post("/sessions/{code}/eliminations", status_code=201)
 def create_elimination(
         session: SessionDep,
-        participant: ParticipantDep
+        participant: ParticipantDep,
+        photo: Annotated[UploadFile, File()],
     ):
+    target_photo = get_file(participant.target.user.photo_path)
+    image = Image.open(photo.file).convert("RGB")
+    image_array = np.array(image)
+
+    result = DeepFace.verify(
+        img1_path=image_array,
+        img2_path=target_photo,
+    )
+    if not result['verified']:
+        return {'info': 'This is not your target!'}
     elimination_db = Elimination(game_session=participant.game_session, eliminator=participant, eliminated=participant.target)
     participant.target = participant.target.target
     session.add(elimination_db)

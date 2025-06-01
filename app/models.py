@@ -19,7 +19,7 @@ class User(UserBase, table=True):
     __tablename__ = "user"
 
     id: UUID | None = Field(default=None, primary_key=True)
-    photo_path: str = ""
+    photo_path: str
     participations: list["Participant"] = Relationship(back_populates="user")
     owned_game_sessions: list["GameSession"] = Relationship(back_populates="owner")
 

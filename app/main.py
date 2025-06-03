@@ -5,13 +5,12 @@ from typing import Annotated
 from sqlalchemy.exc import IntegrityError
 from fastapi.encoders import jsonable_encoder
 from app.database import SessionDep, create_db_and_tables
-from app.models import GameSession, GameSessionPublic, GameSessionStartedPublic, User, Participant, GameStatus, \
-    GameSessionStatusUpdate, Elimination
+from app.models import GameSession, GameSessionPublic, User, Participant, GameStatus, \
+    GameSessionStatusUpdate, Elimination, ParticipantPublic
 from app.dependencies import UserDep, UUIDDep, GameSessionDep, ParticipantDep
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile
 from sqlmodel import select
 from app.config import settings
-from app.services import get_player_count
 from app.storage import upload_file, compare_faces, generate_presigned_url
 
 
@@ -24,7 +23,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.post("/sessions/", response_model=GameSessionPublic)
+@app.post("/sessions/")
 def create_session(
         session: SessionDep,
         user: UserDep
@@ -36,25 +35,35 @@ def create_session(
         try:
             session.commit()
             session.refresh(game_session_db)
-            return game_session_db
+            return {"code": code}
         except IntegrityError:
             session.rollback()
 
     raise HTTPException(status_code=500, detail="Could not generate a unique lobby code")
 
 
-@app.get("/sessions/{code}", response_model=GameSessionStartedPublic)
+@app.get("/sessions/{code}", response_model=GameSessionPublic)
 def get_session(
         session: SessionDep,
         participant: ParticipantDep,
 ):
-    players_alive = get_player_count(session, participant.game_session_id)
+    players = session.exec(
+        select(User.username)
+        .join(Participant, Participant.user_id == User.id)
+        .where(Participant.game_session_id == participant.game_session_id)
+        .where(Participant.target_id.isnot(None))
+    ).all()
     url = generate_presigned_url(participant.target.user.photo_path)
-    return GameSessionStartedPublic(
-        players_alive=players_alive,
-        started_at=participant.game_session.started_at,
-        target_name=participant.target.user.username,
-        target_photo_url=url
+    target = None
+    if participant.target is not None:
+        target = ParticipantPublic(
+            username=participant.target.user.username,
+            photo_url=url,
+        )
+    return GameSessionPublic(
+        players=players,
+        status=participant.game_session.status,
+        target=target
     )
 
 
@@ -96,24 +105,41 @@ def join_session(
         session.refresh(participant_db)
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=403, detail="You have already joined this session")
+        raise HTTPException(status_code=403, detail="You have already joined this session.")
 
 
 @app.delete("/sessions/{code}/participants", status_code=204)
 def leave_session(
         session: SessionDep,
         user: UserDep,
-        game_session: GameSessionDep
+        game_session: GameSessionDep,
+        username: str | None = None
 ):
-    participant = session.exec(
-        select(Participant).where(Participant.game_session == game_session).where(Participant.user == user)).first()
+    if game_session.status != GameStatus.NOT_STARTED:
+        raise HTTPException(status_code=403, detail="Game has already started or ended.")
+    if game_session.owner == user:
+        if not username:
+            raise HTTPException(status_code=400, detail="Username must be provided.")
+        stmt = (
+            select(Participant)
+            .join(Participant.user)
+            .where(Participant.game_session_id == game_session.id)
+            .where(User.username == username)
+        )
+    else:
+        stmt = (
+            select(Participant)
+            .where(Participant.game_session_id == game_session.id)
+            .where(Participant.user_id == user.id)
+        )
+    participant = session.exec(stmt).first()
     if not participant:
         raise HTTPException(status_code=404, detail="Participant not found")
     session.delete(participant)
     session.commit()
 
 
-@app.patch("/sessions/{code}", response_model=GameSessionStartedPublic)
+@app.patch("/sessions/{code}", response_model=GameSessionPublic)
 def update_session_status(
         session: SessionDep,
         user: UserDep,
@@ -136,7 +162,16 @@ def update_session_status(
     session.add(game_session)
     session.commit()
     session.refresh(game_session)
-    return game_session
+    players = session.exec(
+        select(User.username)
+        .join(Participant, Participant.user_id == User.id)
+        .where(Participant.game_session_id == game_session.id)
+        .where(Participant.target_id.isnot(None))
+    ).all()
+    return GameSessionPublic(
+        players=players,
+        status=game_session.status,
+    )
 
 
 def assign_targets(participants: list[Participant]):
@@ -155,17 +190,31 @@ def create_elimination(
 ):
     response = compare_faces(participant.target.user.photo_path, photo)
     if not response:
-        return {"response": "This is not the same person!"}
+        raise HTTPException(status_code=400, detail="Face verification failed.")
 
     elimination_db = Elimination(game_session=participant.game_session, eliminator=participant,
                                  eliminated=participant.target)
     participant.target = participant.target.target
+    if participant.target == participant:
+        participant.game_session.ended_at = datetime.now()
+        session.add(participant.game_session)
     session.add(elimination_db)
     session.add(participant)
     try:
         session.commit()
         session.refresh(elimination_db)
-        return {"new_target": participant.target_id}
+        session.refresh(participant.game_session)
+        if participant.game_session.status == GameStatus.FINISHED:
+            return {"status": "winner", "message": "You are the winner"}
+        url = generate_presigned_url(participant.target.user.photo_path)
+        return {
+            "status": "continue",
+            "message": "Elimination was successful",
+            "target": ParticipantPublic(
+                username=participant.target.user.username,
+                photo_url=url,
+            )
+        }
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=403, detail="This elimination already exists")

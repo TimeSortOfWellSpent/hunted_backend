@@ -59,19 +59,10 @@ class GameSession(GameSessionBase, table=True):
         return GameStatus.FINISHED
 
 
-class GameSessionCreate(GameSessionBase):
-    owner_id: UUID
-
-
 class GameSessionPublic(GameSessionBase):
-    code: str
-
-
-class GameSessionStartedPublic(GameSessionBase):
-    players_alive: int
-    started_at: datetime
-    target_name: str
-    target_photo_url: str
+    players: list[str]
+    status: GameStatus
+    target: Optional["ParticipantPublic"]
 
 
 class GameSessionStatusUpdate(BaseModel):
@@ -116,6 +107,11 @@ class Participant(ParticipantBase, table=True):
         sa_relationship_kwargs={'uselist': False},
         back_populates="target"
     )
+
+
+class ParticipantPublic(ParticipantBase):
+    username: str
+    photo_url: str
 
 
 class EliminationBase(SQLModel):

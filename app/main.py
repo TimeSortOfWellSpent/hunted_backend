@@ -1,28 +1,34 @@
 import secrets, string, jwt, random
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated
 from sqlalchemy.exc import IntegrityError
 from fastapi.encoders import jsonable_encoder
 from app.database import SessionDep, create_db_and_tables
-from app.models import GameSession, GameSessionPublic, User, UserPublic, UserCreate, Participant, GameStatus, \
+from app.models import GameSession, GameSessionPublic, GameSessionStartedPublic, User, Participant, GameStatus, \
     GameSessionStatusUpdate, Elimination
-from app.security import JWT_SECRET_KEY, ALGORITHM
 from app.dependencies import UserDep, UUIDDep, GameSessionDep, ParticipantDep
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Form, File, UploadFile
 from sqlmodel import select
+from app.config import settings
+from app.services import get_player_count
+from app.storage import upload_file, compare_faces, generate_presigned_url
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
     yield
+
+
 app = FastAPI(lifespan=lifespan)
+
 
 @app.post("/sessions/", response_model=GameSessionPublic)
 def create_session(
         session: SessionDep,
         user: UserDep
-    ):
+):
     for _ in range(5):
         code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
         game_session_db = GameSession(owner=user, code=code)
@@ -36,19 +42,31 @@ def create_session(
 
     raise HTTPException(status_code=500, detail="Could not generate a unique lobby code")
 
-@app.get("/sessions/")
-def get_sessions(
-        session: SessionDep
-    ):
-    return session.exec(select(GameSession)).all()
+
+@app.get("/sessions/{code}", response_model=GameSessionStartedPublic)
+def get_session(
+        session: SessionDep,
+        participant: ParticipantDep,
+):
+    players_alive = get_player_count(session, participant.game_session_id)
+    url = generate_presigned_url(participant.target.user.photo_path)
+    return GameSessionStartedPublic(
+        players_alive=players_alive,
+        started_at=participant.game_session.started_at,
+        target_name=participant.target.user.username,
+        target_photo_url=url
+    )
+
+
 @app.post("/users/", status_code=201)
 def create_user(
         session: SessionDep,
-        user: UserCreate,
+        username: Annotated[str, Form()],
+        photo: Annotated[UploadFile, File()],
         uuid: UUIDDep,
-    ):
-
-    user_db = User.model_validate(user, update={"id": uuid})
+):
+    filename = upload_file(photo)
+    user_db = User(username=username, id=uuid, photo_path=filename)
     session.add(user_db)
     try:
         session.commit()
@@ -57,15 +75,16 @@ def create_user(
         session.rollback()
         raise HTTPException(status_code=403, detail="User with this id already exists")
     to_encode = {"uuid": jsonable_encoder(uuid)}
-    token = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.algorithm)
     return {"access_token": token, "token_type": "bearer"}
+
 
 @app.post("/sessions/{code}/participants", status_code=201)
 def join_session(
         session: SessionDep,
         user: UserDep,
         game_session: GameSessionDep
-    ):
+):
     if user.id == game_session.owner_id:
         raise HTTPException(status_code=403, detail="You can not join a session you created")
     if game_session.status != GameStatus.NOT_STARTED:
@@ -75,31 +94,32 @@ def join_session(
     try:
         session.commit()
         session.refresh(participant_db)
-        return participant_db
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=403, detail="You have already joined this session")
 
-@app.delete("/sessions/{code}/participants")
+
+@app.delete("/sessions/{code}/participants", status_code=204)
 def leave_session(
         session: SessionDep,
         user: UserDep,
         game_session: GameSessionDep
-    ):
-    participant = session.exec(select(Participant).where(Participant.game_session == game_session).where(Participant.user == user)).first()
+):
+    participant = session.exec(
+        select(Participant).where(Participant.game_session == game_session).where(Participant.user == user)).first()
     if not participant:
         raise HTTPException(status_code=404, detail="Participant not found")
     session.delete(participant)
     session.commit()
-    return {"ok": True}
 
-@app.patch("/sessions/{code}")
+
+@app.patch("/sessions/{code}", response_model=GameSessionStartedPublic)
 def update_session_status(
         session: SessionDep,
         user: UserDep,
         status: GameSessionStatusUpdate,
         game_session: GameSessionDep
-    ):
+):
     if game_session.owner != user:
         raise HTTPException(status_code=403, detail="You are not the owner of the session")
     if game_session.status == GameStatus.FINISHED:
@@ -107,16 +127,17 @@ def update_session_status(
     elif game_session.status == GameStatus.NOT_STARTED:
         if status.status == GameStatus.FINISHED:
             raise HTTPException(status_code=403, detail="The session has not been started yet")
-        if len(game_session.participants) >= 3:
+        if len(game_session.participants) >= 2:
             assign_targets(game_session.participants)
             game_session.sqlmodel_update({"started_at": datetime.now()})
     elif game_session.status == GameStatus.IN_PROGRESS:
         if status.status == GameStatus.FINISHED:
-            game_session.sqlmodel_update({"ended_at":datetime.now()})
+            game_session.sqlmodel_update({"ended_at": datetime.now()})
     session.add(game_session)
     session.commit()
     session.refresh(game_session)
     return game_session
+
 
 def assign_targets(participants: list[Participant]):
     shuffled = participants.copy()
@@ -125,19 +146,26 @@ def assign_targets(participants: list[Participant]):
         next_participant = shuffled[(i + 1) % len(shuffled)]
         participant.target_id = next_participant.id
 
+
 @app.post("/sessions/{code}/eliminations", status_code=201)
 def create_elimination(
         session: SessionDep,
-        participant: ParticipantDep
-    ):
-    elimination_db = Elimination(game_session=participant.game_session, eliminator=participant, eliminated=participant.target)
+        participant: ParticipantDep,
+        photo: Annotated[UploadFile, File()],
+):
+    response = compare_faces(participant.target.user.photo_path, photo)
+    if not response:
+        return {"response": "This is not the same person!"}
+
+    elimination_db = Elimination(game_session=participant.game_session, eliminator=participant,
+                                 eliminated=participant.target)
     participant.target = participant.target.target
     session.add(elimination_db)
     session.add(participant)
     try:
         session.commit()
         session.refresh(elimination_db)
-        return elimination_db
+        return {"new_target": participant.target_id}
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=403, detail="This elimination already exists")

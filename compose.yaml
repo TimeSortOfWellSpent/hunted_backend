@@ -7,6 +7,8 @@ services:
       - "8000:80"
     depends_on:
       - db
+    env_file:
+      - ".env"
   db:
     image: postgres:16
     restart: always
@@ -19,6 +21,7 @@ services:
       POSTGRES_DB: app
     volumes:
       - db_data:/var/lib/postgresql/data
+
 volumes:
   db_data:
     name: killer_db_data

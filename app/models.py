@@ -1,19 +1,23 @@
 from datetime import datetime
-from fastapi import File, UploadFile, Form
-from pydantic import computed_field, BaseModel, field_validator
-from sqlalchemy import UniqueConstraint
-from sqlmodel import Field, Relationship, SQLModel
-from typing import Optional, Literal, Annotated
+from pydantic import computed_field, BaseModel
+from sqlalchemy import UniqueConstraint, func
+from sqlmodel import Field, Relationship, SQLModel, select
+from typing import Optional, Literal
 from uuid import UUID
 from enum import Enum
+
+from app.database import SessionDep
+
 
 class GameStatus(str, Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     FINISHED = "finished"
 
+
 class UserBase(SQLModel):
     username: str
+
 
 class User(UserBase, table=True):
     __tablename__ = "user"
@@ -23,11 +27,14 @@ class User(UserBase, table=True):
     participations: list["Participant"] = Relationship(back_populates="user")
     owned_game_sessions: list["GameSession"] = Relationship(back_populates="owner")
 
+
 class UserPublic(UserBase):
     pass
 
+
 class GameSessionBase(SQLModel):
     pass
+
 
 class GameSession(GameSessionBase, table=True):
     __tablename__ = "game_session"
@@ -51,16 +58,31 @@ class GameSession(GameSessionBase, table=True):
             return GameStatus.IN_PROGRESS
         return GameStatus.FINISHED
 
+
 class GameSessionCreate(GameSessionBase):
     owner_id: UUID
+
 
 class GameSessionPublic(GameSessionBase):
     code: str
 
+
+class GameSessionStartedPublic(GameSessionBase):
+    players_alive: int
+    started_at: datetime
+    target_name: str
+    target_photo_url: str
+
+
 class GameSessionStatusUpdate(BaseModel):
     status: Literal[GameStatus.IN_PROGRESS, GameStatus.FINISHED]
 
-class Participant(SQLModel, table=True):
+
+class ParticipantBase(SQLModel):
+    pass
+
+
+class Participant(ParticipantBase, table=True):
     __tablename__ = "participant"
     __table_args__ = (
         UniqueConstraint('user_id', 'game_session_id'),
@@ -95,8 +117,10 @@ class Participant(SQLModel, table=True):
         back_populates="target"
     )
 
+
 class EliminationBase(SQLModel):
     pass
+
 
 class Elimination(EliminationBase, table=True):
     __tablename__ = "elimination"

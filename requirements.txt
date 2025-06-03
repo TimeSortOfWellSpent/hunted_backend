@@ -2,8 +2,11 @@ fastapi[standard]>=0.113.0,<0.114.0
 pydantic>=2.7.0,<3.0.0
 sqlmodel==0.0.24
 psycopg2-binary
-pyjwt
+pyjwt~=2.10.1
 python-multipart
-boto3
-pydantic-settings
+boto3~=1.38.27
+pydantic-settings~=2.9.1
 python-dotenv
+SQLAlchemy~=2.0.41
+botocore~=1.38.27
+pillow~=11.2.1

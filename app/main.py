@@ -1,10 +1,14 @@
+import io
 import secrets, string, jwt, random
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated
+
+import boto3
 from sqlalchemy.exc import IntegrityError
 from fastapi.encoders import jsonable_encoder
 
+from app.config import settings
 from app.database import SessionDep, create_db_and_tables
 from app.models import GameSession, GameSessionPublic, User, UserPublic, Participant, GameStatus, \
     GameSessionStatusUpdate, Elimination
@@ -20,7 +24,6 @@ import cv2
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
-    DeepFace.build_model("VGG-Face")
     yield
 app = FastAPI(lifespan=lifespan)
 
@@ -138,16 +141,22 @@ def create_elimination(
         participant: ParticipantDep,
         photo: Annotated[UploadFile, File()],
     ):
-    target_photo = get_file(participant.target.user.photo_path)
-    image = Image.open(photo.file).convert("RGB")
-    image_array = np.array(image)
+    img = Image.open(photo.file)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
 
-    result = DeepFace.verify(
-        img1_path=image_array,
-        img2_path=target_photo,
+    buffer = io.BytesIO()
+    img.save(buffer, format='JPEG', quality=75, optimize=True)
+    photo_bytes = buffer.getvalue()
+    client = boto3.client('rekognition', region_name='eu-central-1')
+    response = client.compare_faces(
+        SourceImage={"S3Object": {"Bucket": settings.bucket_name, "Name": participant.target.user.photo_path}},
+        TargetImage={"Bytes": photo_bytes},
+        SimilarityThreshold=80
     )
-    if not result['verified']:
-        return {'info': 'This is not your target!'}
+    if len(response['FaceMatches']) == 0:
+        return {"response": "This is not the same person!"}
+
     elimination_db = Elimination(game_session=participant.game_session, eliminator=participant, eliminated=participant.target)
     participant.target = participant.target.target
     session.add(elimination_db)
@@ -155,7 +164,7 @@ def create_elimination(
     try:
         session.commit()
         session.refresh(elimination_db)
-        return elimination_db
+        return {"new_target": participant.target_id}
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=403, detail="This elimination already exists")

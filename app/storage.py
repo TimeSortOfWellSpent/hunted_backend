@@ -6,7 +6,7 @@ from fastapi import UploadFile, HTTPException
 
 from app.config import settings
 
-s3 = boto3.client("s3", endpoint_url=settings.minio_endpoint)
+s3 = boto3.client("s3")
 allowed_mime_types = {
     "image/jpeg": ".jpeg",
     "image/png": ".png",
@@ -15,10 +15,7 @@ def upload_file(file: UploadFile):
     if file.content_type not in allowed_mime_types.keys():
         raise HTTPException(status_code=400, detail="Forbidden file type")
     filename = str(uuid.uuid4()) + allowed_mime_types[file.content_type]
-    try:
-        s3.upload_fileobj(file.file, settings.bucket_name, filename)
-    except:
-        raise HTTPException(status_code=500, detail="File could not be uploaded")
+    s3.upload_fileobj(file.file, settings.bucket_name, filename)
     return filename
 
 def get_file(filename: str):

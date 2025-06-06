@@ -47,15 +47,19 @@ def get_session(
         session: SessionDep,
         participant: ParticipantDep,
 ):
-    players = session.exec(
+    query = (
         select(User.username)
         .join(Participant, Participant.user_id == User.id)
         .where(Participant.game_session_id == participant.game_session_id)
-        .where(Participant.target_id.isnot(None))
-    ).all()
-    url = generate_presigned_url(participant.target.user.photo_path)
+    )
+    
+    if participant.game_session.status != GameStatus.NOT_STARTED:
+        query = query.where(Participant.target_id.isnot(None))
+    
+    players = session.exec(query).all()
     target = None
     if participant.target is not None:
+        url = generate_presigned_url(participant.target.user.photo_path)
         target = ParticipantPublic(
             username=participant.target.user.username,
             photo_url=url,
@@ -94,8 +98,8 @@ def join_session(
         user: UserDep,
         game_session: GameSessionDep
 ):
-    if user.id == game_session.owner_id:
-        raise HTTPException(status_code=403, detail="You can not join a session you created")
+    # if user.id == game_session.owner_id:
+    #     raise HTTPException(status_code=403, detail="You can not join a session you created")
     if game_session.status != GameStatus.NOT_STARTED:
         raise HTTPException(status_code=403, detail="The session is either already started or has already ended")
     participant_db = Participant(user=user, game_session=game_session)
@@ -192,26 +196,44 @@ def create_elimination(
     if not response:
         raise HTTPException(status_code=400, detail="Face verification failed.")
 
-    elimination_db = Elimination(game_session=participant.game_session, eliminator=participant,
-                                 eliminated=participant.target)
-    participant.target = participant.target.target
-    if participant.target == participant:
+    active_players = session.exec(
+        select(Participant)
+        .where(Participant.game_session_id == participant.game_session_id)
+        .where(Participant.target_id.isnot(None))
+    ).all()
+    
+    if len(active_players) <= 2:
         participant.game_session.ended_at = datetime.now()
         session.add(participant.game_session)
+        try:
+            session.commit()
+            return {"status": "winner", "message": "You are the winner"}
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(status_code=403, detail="Failed to end game")
+
+    elimination_db = Elimination(
+        game_session=participant.game_session,
+        eliminator=participant,
+        eliminated=participant.target
+    )
+    
+    next_target = participant.target.target
+    participant.target_id = next_target.id
+    
     session.add(elimination_db)
     session.add(participant)
+    
     try:
         session.commit()
-        session.refresh(elimination_db)
-        session.refresh(participant.game_session)
-        if participant.game_session.status == GameStatus.FINISHED:
-            return {"status": "winner", "message": "You are the winner"}
-        url = generate_presigned_url(participant.target.user.photo_path)
+        session.refresh(participant)
+        
+        url = generate_presigned_url(next_target.user.photo_path)
         return {
             "status": "continue",
             "message": "Elimination was successful",
             "target": ParticipantPublic(
-                username=participant.target.user.username,
+                username=next_target.user.username,
                 photo_url=url,
             )
         }
